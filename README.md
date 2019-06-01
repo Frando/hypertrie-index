@@ -37,6 +37,11 @@ feed.ready(() => {
   feed.put('id3', { type: 'planet', name: 'mars' })
   feed.del('id3')
 })
+
+// { key: 't:planet:earth', value: 'id1' }
+// { key: 't:planet:venus', value: 'id4' }
+// { key: 't:river:nile', value: 'id2' }
+
 ```
 
 ## API
