@@ -1,0 +1,16 @@
+{
+  "name": "hypertrie-index",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "hypertrie": "^3.4.4",
+    "memdb": "^1.3.1",
+    "random-access-memory": "^3.1.1"
+  }
+}
