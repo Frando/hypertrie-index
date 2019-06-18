@@ -1,6 +1,7 @@
 const { EventEmitter } = require('events')
 
 module.exports = (...args) => new HypertrieIndex(...args)
+module.exports.transformNode = transformNode
 
 class HypertrieIndex extends EventEmitter {
   constructor (hypertrie, opts) {
@@ -12,6 +13,7 @@ class HypertrieIndex extends EventEmitter {
     this._extended = !!(opts.extended)
     this._hidden = !!(opts.hidden)
     this._prefix = opts.prefix || ''
+    this._valueEncoding = opts.valueEncoding
 
     if (!opts.storeState && !opts.fetchState && !opts.clearIndex) {
     // In-memory storage implementation
@@ -52,13 +54,12 @@ class HypertrieIndex extends EventEmitter {
     const snapshot = this._db.snapshot()
 
     this._fetchState((err, state) => {
-      if (err) return self.emit('error', err)
-      let at
-      if (!state) at = 0
-      else at = state.at
-
+      if (err) return close(err)
       snapshot.head((err, node) => {
         if (err || !node) return close(err)
+
+        let at = 0
+        if (state && state.at) at = state.at
         let to = node.seq + 1
         if (at >= to) return close()
         else process.nextTick(this._run.bind(this), snapshot, at, to, done)
@@ -84,32 +85,52 @@ class HypertrieIndex extends EventEmitter {
     const self = this
     if (at >= to) return cb()
     const diff = db.diff(at, this._prefix, { hidden: this._hidden })
+
+    // let batch = []
+
     diff.next(map)
 
     function map (err, node) {
       if (err) return cb(err)
       if (!node) return cb(null, to)
       let msg = node
-      if (!self._extended) msg = simplify(node)
+      // if (!self._extended) msg = simplify(node)
+
+      // if (batch.length >= self._batchSize) {
+      //   self.mapfn(batch, () => {
+      //     batch = []
+      //     diff.next(map)
+      //   })
+      // } else {
+      //   batch.push(msg)
+      // }
       self.mapfn(msg, () => {
         diff.next(map)
       })
     }
+  }
+}
 
-    function simplify (node) {
-      let msg
-      if (node.left) {
-        msg = node.left
-        msg.delete = false
-      } else {
-        msg = { ...node.right }
-        msg.delete = true
-      }
-      let keys = ['key', 'value', 'delete', 'hidden']
-      return keys.reduce((agg, key) => {
-        agg[key] = msg[key]
-        return agg
-      }, {})
-    }
+function transformNode (node, valueEncoding) {
+  let msg
+  if (node.left) {
+    msg = decode(node.left)
+    msg.delete = false
+    if (node.right) msg.previousNode = decode(node.right)
+  } else {
+    msg = decode(node.right)
+    msg.delete = true
+  }
+  return msg
+  // let keys = ['key', 'value', 'delete', 'hidden']
+  // return keys.reduce((agg, key) => {
+  //   agg[key] = msg[key]
+  //   return agg
+  // }, {})
+
+  function decode (node) {
+    if (!valueEncoding) return node
+    node.value = valueEncoding.decode(node.value)
+    return node
   }
 }

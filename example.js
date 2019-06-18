@@ -23,10 +23,14 @@ indexer.on('ready', () => {
 })
 
 feed.ready(() => {
-  feed.put('id1', { type: 'planet', name: 'earth' })
-  feed.put('id2', { type: 'river', name: 'nile' })
-  feed.put('id3', { type: 'planet', name: 'marsss' })
-  feed.put('id4', { type: 'planet', name: 'venus' })
-  feed.put('id3', { type: 'planet', name: 'mars' })
-  feed.del('id3')
+  feed.put('earth', { type: 'planet', name: 'earth' })
+  feed.put('nile', { type: 'river', name: 'nile' })
+  feed.put('mars', { type: 'planet', name: 'marsss' })
+  feed.put('venus', { type: 'planet', name: 'venus' })
+  feed.put('mars', { type: 'planet', name: 'mars' })
+  feed.del('venus')
+  feed.put('foo', { type: 'planet', name: 'mars' })
 })
+
+let history = feed.createHistoryStream({ live: true })
+history.on('data', d => console.log('history', d))
