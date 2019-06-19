@@ -1,0 +1,116 @@
+const tape = require('tape')
+const hi = require('..')
+const hypertrie = require('hypertrie')
+const memdb = require('memdb')
+const ram = require('random-access-memory')
+const pump = require('pump')
+
+tape('basics', t => {
+  const feed = hypertrie(ram, { valueEncoding: 'json' })
+  const lvl = memdb()
+  const indexer = hi(feed, {
+    map (msg, done) {
+      msg = hi.transformNode(msg)
+      let key = `id:${msg.value.id}`
+      if (msg.delete) lvl.del(key, done)
+      else lvl.put(key, msg.key, done)
+    }
+  })
+
+  indexer.on('ready', () => {
+    let rs = lvl.createReadStream()
+    collect(rs, (err, data) => {
+      t.error(err, 'no error')
+      t.equal(data.length, 2)
+      t.equal(data[0].value, 'bla')
+      t.equal(data[1].value, 'bar')
+      t.end()
+    })
+  })
+
+  feed.ready(() => {
+    feed.put('foo', { id: 1 })
+    feed.put('bar', { id: 2 })
+    feed.put('bla', { id: 1 })
+  })
+})
+
+tape('big', t => {
+  const feed = hypertrie(ram, { valueEncoding: 'json' })
+  const lvl = memdb()
+  const indexer = hi(feed, {
+    map (msg, done) {
+      msg = hi.transformNode(msg)
+      let key = `id:${('' + msg.value.id).padStart(4, 0)}`
+      if (msg.delete) lvl.del(key, done)
+      else lvl.put(key, msg.key, done)
+    }
+  })
+
+  indexer.on('ready', () => {
+    let rs = lvl.createReadStream()
+    collect(rs, (err, data) => {
+      t.error(err, 'no error')
+      console.log(data)
+      // t.equal(data.length, 2)
+      // t.equal(data[0].value, 'bla')
+      // t.equal(data[1].value, 'bar')
+      t.end()
+    })
+  })
+
+  feed.ready(() => {
+    for (let i = 0; i <= 1000; i++) {
+      feed.put(`key-${i}`, { id: i })
+    }
+  })
+})
+
+tape('replication', t => {
+  const t1 = hypertrie(ram, { valueEncoding: 'utf-8' })
+  const lvl1 = memdb()
+  const lvl2 = memdb()
+  t1.ready(() => {
+    const t2 = hypertrie(ram, t1.key, { valueEncoding: 'utf-8' })
+    start(t1, t2)
+  })
+  function map (lvl) {
+    return function (msg, done) {
+      msg = hi.transformNode(msg)
+      if (msg.delete) lvl.del(msg.key, done)
+      lvl.put(msg.value, msg.key, done)
+    }
+  }
+  function start (t1, t2) {
+    const i1 = hi(t1, { map: map(lvl1) })
+    const i2 = hi(t2, { map: map(lvl2) })
+    i1.on('ready', () => collect(lvl1.createReadStream(), (err, data) => {
+      t.error(err, 'no error')
+      t.equal(data.length, 2)
+      t.equal(data[1].key, 'moon')
+    }))
+    i2.on('ready', () => collect(lvl2.createReadStream(), (err, data) => {
+      t.error(err, 'no error')
+      t.equal(data.length, 2)
+      t.equal(data[1].key, 'moon')
+      t.end()
+    }))
+    t1.put('start', 'earth')
+    t1.put('end', 'moon')
+    replicate(t1, t2, () => {
+      console.log('replication finished')
+    })
+  }
+})
+
+function replicate (a, b, cb) {
+  var stream = a.replicate()
+  stream.pipe(b.replicate()).pipe(stream).on('end', cb)
+}
+
+function collect (rs, cb) {
+  let stack = []
+  rs.on('data', d => stack.push(d))
+  rs.on('end', () => cb(null, stack))
+  rs.on('error', err => cb(err))
+}

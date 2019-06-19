@@ -13,6 +13,7 @@ class HypertrieIndex extends EventEmitter {
     this._extended = !!(opts.extended)
     this._hidden = !!(opts.hidden)
     this._prefix = opts.prefix || ''
+    this._transformNode = opts.transformNode
     this._valueEncoding = opts.valueEncoding
 
     if (!opts.storeState && !opts.fetchState && !opts.clearIndex) {
@@ -36,7 +37,7 @@ class HypertrieIndex extends EventEmitter {
     }
 
     this._db.ready(() => {
-      this._watcher = this._db.watch('')
+      this._watcher = this._db.watch(this._prefix)
       this._watcher.on('change', this.run.bind(this))
       this.run()
     })
@@ -58,17 +59,17 @@ class HypertrieIndex extends EventEmitter {
       snapshot.head((err, node) => {
         if (err || !node) return close(err)
 
-        let at = 0
-        if (state && state.at) at = state.at
+        let from = 0
+        if (state && state.from) from = state.from
         let to = node.seq + 1
-        if (at >= to) return close()
-        else process.nextTick(this._run.bind(this), snapshot, at, to, done)
+        if (from >= to) return close()
+        else process.nextTick(this._run.bind(this), snapshot, from, to, done)
       })
     })
 
     function done (err, seq) {
       if (err || !seq) return close(err)
-      self._storeState({ at: seq }, err => {
+      self._storeState({ from: seq }, err => {
         process.nextTick(close, err, seq)
       })
     }
@@ -81,10 +82,11 @@ class HypertrieIndex extends EventEmitter {
     }
   }
 
-  _run (db, at, to, cb) {
+  _run (db, from, to, cb) {
+    console.log(db.feed.length, from, to)
     const self = this
-    if (at >= to) return cb()
-    const diff = db.diff(at, this._prefix, { hidden: this._hidden })
+    if (from >= to) return cb()
+    const diff = db.diff(from, this._prefix, { hidden: this._hidden })
 
     // let batch = []
 
@@ -94,7 +96,7 @@ class HypertrieIndex extends EventEmitter {
       if (err) return cb(err)
       if (!node) return cb(null, to)
       let msg = node
-      // if (!self._extended) msg = simplify(node)
+      if (self._transformNode) msg = transformNode(msg)
 
       // if (batch.length >= self._batchSize) {
       //   self.mapfn(batch, () => {
