@@ -3,21 +3,28 @@ const hi = require('..')
 const hypertrie = require('hypertrie')
 const memdb = require('memdb')
 const ram = require('random-access-memory')
-const pump = require('pump')
 
 tape('basics', t => {
   const feed = hypertrie(ram, { valueEncoding: 'json' })
   const lvl = memdb()
   const indexer = hi(feed, {
-    map (msg, done) {
-      msg = hi.transformNode(msg)
-      let key = `id:${msg.value.id}`
-      if (msg.delete) lvl.del(key, done)
-      else lvl.put(key, msg.key, done)
+    map (msgs, done) {
+      let missing = msgs.length
+      for (let msg of msgs) {
+        msg = hi.transformNode(msg)
+        let key = `id:${msg.value.id}`
+        if (msg.delete) lvl.del(key, finish)
+        else lvl.put(key, msg.key, finish)
+      }
+
+      function finish () {
+        if (--missing === 0) done()
+      }
     }
   })
 
   indexer.on('ready', () => {
+    // if (feed.length < 2) return
     let rs = lvl.createReadStream()
     collect(rs, (err, data) => {
       t.error(err, 'no error')
@@ -31,39 +38,57 @@ tape('basics', t => {
   feed.ready(() => {
     feed.put('foo', { id: 1 })
     feed.put('bar', { id: 2 })
-    feed.put('bla', { id: 1 })
+    feed.put('bla', { id: 1 }, () => console.log(' last put'))
   })
 })
+
+function forAll (msgs, done, fn) {
+  let missing = msgs.length
+  for (let msg of msgs) {
+    fn(msg, () => {
+      if (--missing === 0) done()
+    })
+  }
+}
 
 tape('big', t => {
   const feed = hypertrie(ram, { valueEncoding: 'json' })
   const lvl = memdb()
   const indexer = hi(feed, {
-    map (msg, done) {
-      msg = hi.transformNode(msg)
-      let key = `id:${('' + msg.value.id).padStart(4, 0)}`
-      if (msg.delete) lvl.del(key, done)
-      else lvl.put(key, msg.key, done)
+    map (msgs, done) {
+      t.equal(msgs.length, 100, 'batch size correct')
+      forAll(msgs, done, (msg, done) => {
+        msg = hi.transformNode(msg)
+        let key = `id:${('' + msg.value.id).padStart(4, 0)}`
+        if (msg.delete) lvl.del(key, done)
+        else lvl.put(key, msg.key, done)
+      })
     }
   })
 
+  let alldata = []
+
+  let count = 0
   indexer.on('ready', () => {
-    let rs = lvl.createReadStream()
-    collect(rs, (err, data) => {
-      t.error(err, 'no error')
-      console.log(data)
-      // t.equal(data.length, 2)
-      // t.equal(data[0].value, 'bla')
-      // t.equal(data[1].value, 'bar')
-      t.end()
-    })
+    count++
+    if (count === 10) finish()
   })
 
   feed.ready(() => {
-    for (let i = 0; i <= 1000; i++) {
+    for (let i = 0; i < 1000; i++) {
       feed.put(`key-${i}`, { id: i })
     }
   })
+
+  function finish () {
+    let rs = lvl.createReadStream()
+    collect(rs, (err, data) => {
+      t.error(err, 'no error')
+      alldata = [...alldata, ...data]
+      t.equal(alldata.length, 1000, 'all correct')
+      t.end()
+    })
+  }
 })
 
 tape('replication', t => {
@@ -75,10 +100,12 @@ tape('replication', t => {
     start(t1, t2)
   })
   function map (lvl) {
-    return function (msg, done) {
-      msg = hi.transformNode(msg)
-      if (msg.delete) lvl.del(msg.key, done)
-      lvl.put(msg.value, msg.key, done)
+    return function (msgs, done) {
+      forAll(msgs, done, (msg, done) => {
+        msg = hi.transformNode(msg)
+        if (msg.delete) lvl.del(msg.key, done)
+        lvl.put(msg.value, msg.key, done)
+      })
     }
   }
   function start (t1, t2) {

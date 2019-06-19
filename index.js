@@ -1,3 +1,4 @@
+const varint = require('varint')
 const { EventEmitter } = require('events')
 
 module.exports = (...args) => new HypertrieIndex(...args)
@@ -10,11 +11,13 @@ class HypertrieIndex extends EventEmitter {
     this._db = hypertrie
     if (!opts.map) throw new Error('Map function is required.')
     this.mapfn = opts.map
+
     this._extended = !!(opts.extended)
     this._hidden = !!(opts.hidden)
     this._prefix = opts.prefix || ''
     this._transformNode = opts.transformNode
     this._valueEncoding = opts.valueEncoding
+    this._batchSize = opts.batchSize || 100
 
     if (!opts.storeState && !opts.fetchState && !opts.clearIndex) {
     // In-memory storage implementation
@@ -44,70 +47,97 @@ class HypertrieIndex extends EventEmitter {
   }
 
   run () {
-    const self = this
     if (this._running) {
       this._continue = true
       return
     }
 
     this._running = true
-    this._continue = false
-    const snapshot = this._db.snapshot()
-
-    this._fetchState((err, state) => {
-      if (err) return close(err)
-      snapshot.head((err, node) => {
-        if (err || !node) return close(err)
-
-        let from = 0
-        if (state && state.from) from = state.from
-        let to = node.seq + 1
-        if (from >= to) return close()
-        else process.nextTick(this._run.bind(this), snapshot, from, to, done)
-      })
-    })
-
-    function done (err, seq) {
-      if (err || !seq) return close(err)
-      self._storeState({ from: seq }, err => {
-        process.nextTick(close, err, seq)
-      })
-    }
-
-    function close (err, seq) {
-      if (err) self.emit('error', err)
-      self._running = false
-      if (self._continue) process.nextTick(self.run.bind(self))
-      else if (seq) self.emit('ready')
-    }
+    this._work()
   }
 
-  _run (db, from, to, cb) {
-    console.log(db.feed.length, from, to)
+  _work () {
     const self = this
-    if (from >= to) return cb()
-    const diff = db.diff(from, this._prefix, { hidden: this._hidden })
 
-    // let batch = []
+    // Default state.
+    let state = { from: 0 }
+    let batch = []
 
-    diff.next(map)
+    self._fetchState((err, buf) => {
+      if (err) return finalize(err)
+      if (buf) state = decodeState(buf)
 
-    function map (err, node) {
-      if (err) return cb(err)
-      if (!node) return cb(null, to)
-      let msg = node
-      if (self._transformNode) msg = transformNode(msg)
+      // now start a diff with this state info
+      process.nextTick(start, state)
+    })
 
-      // if (batch.length >= self._batchSize) {
-      //   self.mapfn(batch, () => {
-      //     batch = []
-      //     diff.next(map)
-      //   })
-      // } else {
-      //   batch.push(msg)
-      // }
-      self.mapfn(msg, () => {
-        diff.next(map)
+    function start () {
+      self._continue = false
+      if (state.from >= state.to) finish(null, state, batch)
+      let snapshot
+      if (state.checkpoint) {
+        snapshot = self._db.snapshot(state.to)
+      } else {
+        // Here, we catch all updates until now so reset the
+        // continue marker.
+        snapshot = self._db.snapshot()
+        state.from = state.to
+        state.to = snapshot.feed.length
+      }
+
+      const diff = snapshot.diff(state.from, self._prefix, {
+        hidden: self._hidden,
+        checkpoint: state.checkpoint
+      })
+
+      iterate(diff)
+    }
+
+    function iterate (diff) {
+      diff.next(map)
+
+      function map (err, msg) {
+        if (err) return finish(err, state, batch)
+        if (msg) batch.push(msg)
+
+        if (!msg) {
+          state.checkpoint = null
+          finish(null, state, batch)
+        } else if (batch.length === self._batchSize) {
+          state.checkpoint = diff.checkpoint()
+          finish(null, state, batch)
+        } else {
+          diff.next(map)
+        }
+      }
+    }
+
+    function finish (err) {
+      if (err || !batch || state.from === state.to) return finalize(err, state)
+      // Batch size is not yet full and there's updates.
+      if (batch.length < self._batchSize && self._continue) {
+        return start()
+      }
+      if (batch.length < self._batchSize && !state.checkpoint && self._db.feed.length > state.to) {
+        return start()
+      }
+
+      if (batch.length) self.mapfn(batch, () => finalize(null, state, batch))
+      else finalize(null, state)
+    }
+
+    function finalize (err, state, batch) {
+      if (!state || err) {
+        if (err) self.emit('error', err)
+        self._running = false
+        return
+      }
+
+      self._storeState(encodeState(state), err => {
+        if (err) self.emit('error', err)
+        self._running = false
+        if (batch && batch.length) self.emit('ready')
+        if (self._continue || state.checkpoint) self.run()
       })
     }
   }
@@ -116,23 +146,45 @@ class HypertrieIndex extends EventEmitter {
 function transformNode (node, valueEncoding) {
   let msg
   if (node.left) {
-    msg = decode(node.left)
+    msg = decodeValue(node.left, valueEncoding)
     msg.delete = false
-    if (node.right) msg.previousNode = decode(node.right)
+    if (node.right) msg.previousNode = decodeValue(node.right)
   } else {
-    msg = decode(node.right)
+    msg = decodeValue(node.right, valueEncoding)
     msg.delete = true
   }
   return msg
-  // let keys = ['key', 'value', 'delete', 'hidden']
-  // return keys.reduce((agg, key) => {
-  //   agg[key] = msg[key]
-  //   return agg
-  // }, {})
+}
 
-  function decode (node) {
-    if (!valueEncoding) return node
-    node.value = valueEncoding.decode(node.value)
-    return node
-  }
+function decodeValue (node, valueEncoding) {
+  if (!valueEncoding) return node
+  node.value = valueEncoding.decode(node.value)
+  return node
+}
+
+function encodeState (state) {
+  let { checkpoint, from, to } = state
+  checkpoint = checkpoint || Buffer.alloc(0)
+  from = from || 0
+  to = to || 0
+  let buf = Buffer.alloc(128)
+  varint.encode(from, buf)
+  let offset = varint.encode.bytes
+  varint.encode(to, buf, offset)
+  offset = offset + varint.encode.bytes
+  let slice = buf.slice(0, offset)
+  const final = Buffer.concat([slice, checkpoint])
+  return final
+}
+
+function decodeState (buf) {
+  if (!buf || !buf.length) return { from: 0 }
+  let cur = buf
+  let from = varint.decode(cur)
+  cur = cur.slice(varint.decode.bytes)
+  let to = varint.decode(cur)
+  cur = cur.slice(varint.decode.bytes)
+  let checkpoint = cur.length ? cur : null
+  const state = { from, to, checkpoint }
+  return state
 }

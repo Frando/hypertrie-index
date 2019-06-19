@@ -52,7 +52,11 @@ feed.ready(() => {
 
 `opts`: An opts object with a required `map` function (see below)..
 
-* `opts` can include: `hidden` to work on the hidden namespace, `storeState`, `fetchState` to optionally store the processing state (currently expects JSON)
+* `opts` can include (with defaults): 
+
+  * `hidden: false` to work on the hidden namespace
+  * `storeState`, `fetchState` to optionally store the processing state (currently expects JSON)
+  * `transformNode: false` emit messages formatted like `{ key, value, delete, previousValue }` instead of the default `{ key, left, right }` as returned from a hypertrie diff iterator.
 
 The returned `indexer` emits a `ready` object whenever a round of processing is finished. It automatically listens on changes of the hypertrie.
 

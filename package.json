@@ -1,20 +1,23 @@
 {
   "name": "hypertrie-index",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "standard . && tape test/*.js"
+    "test": "standard && tape test/*.js"
   },
   "author": "",
   "license": "GPL-3.0",
   "devDependencies": {
-    "hypertrie": "^3.6.1",
+    "hypertrie": "^3.7.0",
     "memdb": "^1.3.1",
     "pump": "^3.0.0",
     "random-access-file": "^2.1.3",
     "random-access-memory": "^3.1.1",
     "standard": "^12.0.1",
     "tape": "^4.10.2"
+  },
+  "dependencies": {
+    "varint": "^5.0.0"
   }
 }
