@@ -47,11 +47,13 @@ class HypertrieIndex extends EventEmitter {
   }
 
   run () {
+    // console.log('RUN running %o continue %o', this._running, this._continue)
     if (this._running) {
       this._continue = true
       return
     }
 
+    this._continue = false
     this._running = true
     this._work()
   }
@@ -72,7 +74,6 @@ class HypertrieIndex extends EventEmitter {
     })
 
     function start () {
-      self._continue = false
       if (state.from >= state.to) finish(null, state, batch)
       let snapshot
       if (state.checkpoint) {
@@ -90,6 +91,8 @@ class HypertrieIndex extends EventEmitter {
         checkpoint: state.checkpoint
       })
 
+      // console.log('START from %o to %o checkpoint %o', state.from, state.to, state.checkpoint)
+
       iterate(diff)
     }
 
@@ -97,6 +100,7 @@ class HypertrieIndex extends EventEmitter {
       diff.next(map)
 
       function map (err, msg) {
+        // console.log('ITERATOR', msg)
         if (err) return finish(err, state, batch)
         if (msg) batch.push(msg)
 
@@ -113,17 +117,27 @@ class HypertrieIndex extends EventEmitter {
     }
 
     function finish (err) {
+      // console.log('FINISH batch %o state %o', batch, state)
       if (err || !batch || state.from === state.to) return finalize(err, state)
       // Batch size is not yet full and there's updates.
-      if (batch.length < self._batchSize && self._continue) {
-        return start()
-      }
+      // TODO: This logic is not correct. The idea was to start a second run
+      // here already to fill the batch up before finishing to the map function.
+      // However this seems to cause the run to never finish fully.
+      // if (batch.length < self._batchSize && self._continue) {
+      //   return start()
+      // }
       if (batch.length < self._batchSize && !state.checkpoint && self._db.feed.length > state.to) {
         return start()
       }
 
-      if (batch.length) self.mapfn(batch, () => finalize(null, state, batch))
-      else finalize(null, state)
+      if (batch.length) {
+        if (self._transformNode) {
+          batch = batch.map(msg => transformNode(msg, self._valueEncoding))
+        }
+        self.mapfn(batch, () => finalize(null, state, batch))
+      } else {
+        finalize(null, state)
+      }
     }
 
     function finalize (err, state, batch) {
@@ -136,6 +150,7 @@ class HypertrieIndex extends EventEmitter {
       self._storeState(encodeState(state), err => {
         if (err) self.emit('error', err)
         self._running = false
+        // console.log('DONE running %o continue %o batch %o', self._running, self._continue, batch && batch.length)
         if (batch && batch.length) self.emit('ready')
         if (self._continue || state.checkpoint) self.run()
       })

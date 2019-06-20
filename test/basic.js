@@ -130,10 +130,66 @@ tape('replication', t => {
   }
 })
 
+tape.only('prefix', t => {
+  let missing = 0
+
+  run(undefined, (err, results) => {
+    t.error(err)
+    console.log('undef', results)
+    t.equal(results.length, 3, 'undef: results')
+    finish()
+  })
+  run('take', (err, results) => {
+    t.error(err)
+    console.log('take', results)
+    t.equal(results.length, 2, 'take: result')
+    t.equal(results[0].value, 'hello', 'take: value matches')
+    finish()
+  })
+
+  function finish () {
+    if (--missing === 0) t.end()
+  }
+
+  function run (prefix, cb) {
+    const feed = hypertrie(ram, { valueEncoding: 'utf8' })
+    missing++
+    let results = []
+    const indexer = hi(feed, {
+      prefix,
+      transformNode: true,
+      map (msgs, next) {
+        results = [...results, ...msgs]
+        next()
+      }
+    })
+
+    indexer.on('ready', () => cb(null, results))
+
+    feed.ready(() => {
+      feed.put('take/bar', 'hello', (err) => {
+        t.error(err)
+        feed.put('not/foo', 'miss me', (err) => {
+          t.error(err)
+        })
+        feed.put('take', 'hello', (err) => {
+          t.error(err)
+        })
+      })
+    })
+  }
+})
+
 function replicate (a, b, cb) {
   var stream = a.replicate()
   stream.pipe(b.replicate()).pipe(stream).on('end', cb)
 }
+
+// function waitTicks (cnt) {
+//   console.log('WAIT', cnt)
+//   if (cnt === 0) return
+//   process.nextTick(() => setTimeout(() => waitTicks(--cnt), 10))
+// }
 
 function collect (rs, cb) {
   let stack = []
