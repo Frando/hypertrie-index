@@ -4,20 +4,15 @@ const { EventEmitter } = require('events')
 module.exports = (...args) => new HypertrieIndex(...args)
 module.exports.transformNode = transformNode
 
-class HypertrieIndex extends EventEmitter {
-  constructor (hypertrie, opts) {
+class Index extends EventEmitter {
+  constructor (opts) {
     super()
-    opts = opts || {}
-    this._db = hypertrie
-    if (!opts.map) throw new Error('Map function is required.')
-    this.mapfn = opts.map
 
-    this._extended = !!(opts.extended)
-    this._hidden = !!(opts.hidden)
-    this._prefix = opts.prefix || ''
-    this._transformNode = opts.transformNode
-    this._valueEncoding = opts.valueEncoding
-    this._batchSize = opts.batchSize || 100
+    this._get = opts.get
+    this._map = opts.map
+    this._batchSize = opts.batchSize
+
+    this._batch = []
 
     if (!opts.storeState && !opts.fetchState && !opts.clearIndex) {
     // In-memory storage implementation
@@ -38,16 +33,18 @@ class HypertrieIndex extends EventEmitter {
       this._fetchState = opts.fetchState
       this._clearIndex = opts.clearIndex || null
     }
+  }
 
-    this._db.ready(() => {
-      this._watcher = this._db.watch(this._prefix)
-      this._watcher.on('change', this.run.bind(this))
-      this.run()
+  _processBatch (msgs, cb) {
+    if (!msgs.length) return cb()
+    this._map(msgs, () => {
+      this.emit('indexed', msgs)
+      cb()
     })
   }
 
   run () {
-    // console.log('RUN running %o continue %o', this._running, this._continue)
+    const self = this
     if (this._running) {
       this._continue = true
       return
@@ -55,106 +52,159 @@ class HypertrieIndex extends EventEmitter {
 
     this._continue = false
     this._running = true
-    this._work()
+
+    this._fetchState((err, state) => {
+      if (err) return this.emit('error', err)
+
+      this._get(state, (err, results, workMoreCb) => {
+        if (err) return this.emit('error', err)
+
+        results = results || {}
+        const { state, batch } = results
+
+        if (!batch || !batch.length) return finish()
+
+        this._batch = this._batch.concat(batch)
+
+        if (this._batch.length < this._batchSize) return finish()
+
+        const slice = this._batch.slice(0, this._batchSize)
+        this._batch = this._batch.slice(this._batchSize)
+        this._processBatch(slice, finish)
+
+        function finish () {
+          if (state) {
+            self._storeState(state, (err) => {
+              if (err) return self.emit('error', err)
+              if (workMoreCb) workMoreCb(finalize)
+            })
+          } else finalize()
+        }
+
+        function finalize () {
+          if (self._continue) {
+            self._running = false
+            self.run()
+          } else if (self._batch.length) {
+            const slice = self._batch.slice()
+            self._batch = []
+            self._processBatch(slice, close)
+          } else close()
+        }
+
+        function close () {
+          self._running = false
+          self.emit('ready')
+        }
+      })
+    })
   }
+}
 
-  _work () {
-    const self = this
+class HypertrieIndex extends EventEmitter {
+  constructor (hypertrie, opts) {
+    super()
+    opts = opts || {}
+    opts.batchSize = opts.batchSize || 100
 
-    // Default state.
-    let state = { from: 0 }
-    let batch = []
+    this._db = hypertrie
+    this._opts = opts
 
-    self._fetchState((err, buf) => {
-      if (err) return finalize(err)
-      if (buf) state = decodeState(buf)
+    this._prefix = opts.prefix || ''
+    // map, hidden, prefix, valueEncoding, transformNode
 
-      // now start a diff with this state info
-      process.nextTick(start, state)
+    this._index = new Index({
+      storeState: opts.storeState,
+      fetchState: opts.fetchState,
+      clearIndex: opts.clearIndex,
+      batchSize: opts.batchSize,
+      get: this._get.bind(this),
+      map: this._batch.bind(this)
     })
 
-    function start () {
-      if (state.from >= state.to) finish(null, state, batch)
-      let snapshot
-      if (state.checkpoint) {
-        snapshot = self._db.snapshot(state.to)
-      } else {
-        // Here, we catch all updates until now so reset the
-        // continue marker.
-        snapshot = self._db.snapshot()
-        state.from = state.to
-        state.to = snapshot.feed.length
-      }
+    this._index.on('indexed', batch => this.emit('indexed', batch))
+    this._index.on('ready', () => this.emit('ready'))
 
-      const diff = snapshot.diff(state.from, self._prefix, {
-        hidden: self._hidden,
-        checkpoint: state.checkpoint
-      })
+    this._db.ready(() => {
+      this._watcher = this._db.watch(this._prefix)
+      this._watcher.on('change', () => this._index.run())
+      this._index.run()
+    })
+  }
 
-      // console.log('START from %o to %o checkpoint %o', state.from, state.to, state.checkpoint)
+  _currentSeq () {
+    return this._db.feed.length
+  }
 
-      iterate(diff)
+  _get (stateBuf, cb) {
+    const self = this
+    const state = decodeState(stateBuf)
+
+    if (!state.checkpoint && state.to === this._currentSeq()) {
+      return cb()
     }
 
-    function iterate (diff) {
-      diff.next(map)
+    let snapshot, from, to
+    if (state.checkpoint) {
+      snapshot = this._db.snapshot(state.to)
+      from = state.from
+      to = state.to
+    } else {
+      // Here, we catch all updates until now so reset the
+      // continue marker.
+      snapshot = this._db.snapshot()
+      from = state.to
+      to = snapshot.feed.length
+    }
 
-      function map (err, msg) {
-        // console.log('ITERATOR', msg)
-        if (err) return finish(err, state, batch)
-        if (msg) batch.push(msg)
+    const diff = snapshot.diff(from, this._prefix, {
+      hidden: this._opts.hidden,
+      checkpoint: state.checkpoint
+    })
 
-        if (!msg) {
-          state.checkpoint = null
-          finish(null, state, batch)
-        } else if (batch.length === self._batchSize) {
-          state.checkpoint = diff.checkpoint()
-          finish(null, state, batch)
-        } else {
+    let batch = []
+
+    diff.next(map)
+
+    function map (err, msg) {
+      if (err) return finish(err)
+
+      if (!msg) return finish(null, false)
+
+      if (msg) batch.push(msg)
+
+      if (batch.length === self._opts.batchSize) {
+        finish(null, true)
+      } else {
+        diff.next(map)
+      }
+    }
+
+    function finish (err, workLeft) {
+      if (err) return cb(err)
+
+      let checkpoint
+      if (workLeft) {
+        checkpoint = diff.checkpoint()
+      }
+
+      const state = encodeState({ from, to, checkpoint })
+      cb(null, { state, batch }, (done) => {
+        if (workLeft) {
+          batch = []
           diff.next(map)
-        }
-      }
-    }
-
-    function finish (err) {
-      // console.log('FINISH batch %o state %o', batch, state)
-      if (err || !batch || state.from === state.to) return finalize(err, state)
-      // Batch size is not yet full and there's updates.
-      // TODO: This logic is not correct. The idea was to start a second run
-      // here already to fill the batch up before finishing to the map function.
-      // However this seems to cause the run to never finish fully.
-      // if (batch.length < self._batchSize && self._continue) {
-      //   return start()
-      // }
-      if (batch.length < self._batchSize && !state.checkpoint && self._db.feed.length > state.to) {
-        return start()
-      }
-
-      if (batch.length) {
-        if (self._transformNode) {
-          batch = batch.map(msg => transformNode(msg, self._valueEncoding))
-        }
-        self.mapfn(batch, () => finalize(null, state, batch))
-      } else {
-        finalize(null, state)
-      }
-    }
-
-    function finalize (err, state, batch) {
-      if (!state || err) {
-        if (err) self.emit('error', err)
-        self._running = false
-        return
-      }
-
-      self._storeState(encodeState(state), err => {
-        if (err) self.emit('error', err)
-        self._running = false
-        // console.log('DONE running %o continue %o batch %o', self._running, self._continue, batch && batch.length)
-        if (batch && batch.length) self.emit('ready')
-        if (self._continue || state.checkpoint) self.run()
+        } else done()
       })
+
+      // cb(null, stateBuf, batch, workLeft)
     }
+  }
+
+  _batch (msgs, cb) {
+    if (this._opts.transformNode) {
+      msgs = msgs.map(msg => transformNode(msg, this._opts.valueEncoding))
+    }
+    this._opts.map(msgs, cb)
   }
 }
 

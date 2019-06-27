@@ -56,7 +56,7 @@ tape('big', t => {
   const lvl = memdb()
   const indexer = hi(feed, {
     map (msgs, done) {
-      t.equal(msgs.length, 100, 'batch size correct')
+      // t.equal(msgs.length, 100, 'batch size correct')
       forAll(msgs, done, (msg, done) => {
         msg = hi.transformNode(msg)
         let key = `id:${('' + msg.value.id).padStart(4, 0)}`
@@ -69,9 +69,13 @@ tape('big', t => {
   let alldata = []
 
   let count = 0
-  indexer.on('ready', () => {
+  indexer.on('indexed', () => {
     count++
-    if (count === 10) finish()
+    console.log('index run', count)
+  })
+
+  indexer.on('ready', () => {
+    finish()
   })
 
   feed.ready(() => {
@@ -130,7 +134,7 @@ tape('replication', t => {
   }
 })
 
-tape.only('prefix', t => {
+tape('prefix', t => {
   let missing = 0
 
   run(undefined, (err, results) => {
