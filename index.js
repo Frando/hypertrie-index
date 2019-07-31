@@ -50,6 +50,8 @@ class Index extends EventEmitter {
       return
     }
 
+    this.emit('start')
+
     this._continue = false
     this._running = true
 
@@ -123,6 +125,7 @@ class HypertrieIndex extends EventEmitter {
     })
 
     this._index.on('indexed', batch => this.emit('indexed', batch))
+    this._index.on('start', batch => this.emit('start'))
     this._index.on('ready', () => this.emit('ready'))
 
     this._db.ready(() => {
