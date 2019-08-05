@@ -18,7 +18,6 @@ function hypertrieIndex (db, opts, cb) {
   let running = false
 
   opts.live = defaultTrue(opts.live)
-  if (opts.live) db.watch(opts.prefix || '', run)
   opts.valueEncoding = opts.valueEncoding ? codecs(opts.valueEncoding) : db.valueEncoding
 
   if (opts.fetchState) {
@@ -46,13 +45,18 @@ function hypertrieIndex (db, opts, cb) {
   return emitter
 
   function run () {
-    init = true
     if (running) return
     // Skip the header entry.
-    if (db.version < 2) return
     // console.log('RUN', state.seq, state.checkpoint ? true : null)
+    if (!init) {
+      init = true
+      if (opts.live) db.watch(opts.prefix || '', run)
+    }
+    if (db.version < 2) return
     running = true
-    emitter.emit('start')
+
+    emitter.emit('start', state)
+
     const { seq, checkpoint } = state
 
     if (checkpoint && checkpoint.length) {
