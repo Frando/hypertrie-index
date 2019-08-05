@@ -2,64 +2,39 @@
 
 Run an indexing function over a hypertrie.
 
-## Usage
-
-```js
-const hypertrie = require('hypertrie')
-const ram = require('random-access-memory')
-const hypertrieIndex = require('.')
-const memdb = require('memdb')
-
-const feed = hypertrie(ram, { valueEncoding: 'json' })
-const lvl = memdb()
-
-const indexer = hypertrieIndex(feed, {
-  map (msg, done) {
-    let key = `t:${msg.value.type}:${msg.value.name}`
-    if (msg.delete) {
-      lvl.del(key, done)
-    } else {
-      lvl.put(key, msg.key, done)
-    }
-  }
-})
-
-indexer.on('ready', () => {
-  let rs = lvl.createReadStream()
-  rs.on('data', console.log)
-})
-
-feed.ready(() => {
-  feed.put('id1', { type: 'planet', name: 'earth' })
-  feed.put('id2', { type: 'river', name: 'nile' })
-  feed.put('id3', { type: 'planet', name: 'marsss' })
-  feed.put('id4', { type: 'planet', name: 'venus' })
-  feed.put('id3', { type: 'planet', name: 'mars' })
-  feed.del('id3')
-})
-
-// { key: 't:planet:earth', value: 'id1' }
-// { key: 't:planet:venus', value: 'id4' }
-// { key: 't:river:nile', value: 'id2' }
-
-```
-
 ## API
 
-#### `const indexer = hypertrieIndex(feed, [opts])`
+```js
+const hypertrieIndex = require('hypertrie-index')
+```
 
-`feed`: A hypertrie feed
+#### `const indexer = hypertrieIndex(hypertrie, opts)`
 
-`opts`: An opts object with a required `map` function (see below)..
+`hypertrie` is a [hypertrie](https://github.com/mafintosh/hypertrie) instance.
+`opts` is an object of options (with their defaults):
 
-* `opts` can include (with defaults): 
+* `map`: The map function to run on each batch.
+* `batchSize`: Max number of entries to pass into the map function.
+* `storeState: function (buf, cb)`, `fetchState: function (cb)`: Function to store and retrieve the current state. `buf` is a buffer that should be stored as-is in some storage backend, and be passed back into `cb(null, buf)` in `fetchState`.
+* `live: true` Keep watching for changes
+* `prefix: ''`: Set a prefix to only index and watch a part of the trie.
+* `transformNode: false`: Pass all messages through `hypertrie.transformNode`
 
-  * `hidden: false` to work on the hidden namespace
-  * `storeState`, `fetchState` to optionally store the processing state (currently expects JSON)
-  * `transformNode: false` emit messages formatted like `{ key, value, delete, previousValue }` instead of the default `{ key, left, right }` as returned from a hypertrie diff iterator.
+The map function will receive an array of change messages. The messages are in the format returned from `hypertrie.diff`: `{ left: { key, value, seq }, right: { key, value, seq } }`. If passed through `hypertrie.transformNode`, they are in the format `{ key, value, seq, deleted, previousValue }` where `deleted` is false for puts and true for deletes. In case of updates `previousValue` will contain the previous value.
 
-The returned `indexer` emits a `ready` object whenever a round of processing is finished. It automatically listens on changes of the hypertrie.
+#### `indexer.pause()`
 
-The `map` function is invoked for each change. It gets an object of the form `{ key, value, deleted }` where deleted is true when a value was deleted. Optionally, set the `extended`option in the constructor to instead get the full change object (as is returned by hypertrie's diff iterator).
+Pause the indexing.
 
-*(to be continued)*
+#### `indexer.resume()`
+
+Resume the indexing.
+
+#### `indexer.on('indexed', function (batch) {}`
+
+Emitted after each round of indexing. `batch` is the array of change messages.
+
+#### `indexer.on('finished', function () {})`
+
+Emitted when indexing finishes.
+

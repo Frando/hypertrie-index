@@ -9,6 +9,7 @@ tape('basics', t => {
   const lvl = memdb()
   const indexer = hi(feed, {
     map (msgs, done) {
+      console.log('map', msgs)
       let missing = msgs.length
       for (let msg of msgs) {
         msg = hi.transformNode(msg)
@@ -68,10 +69,10 @@ tape('big', t => {
 
   let alldata = []
 
-  let count = 0
+  // let count = 0
   indexer.on('indexed', () => {
-    count++
-    console.log('index run', count)
+    // count++
+    // console.log('index run', count)
   })
 
   indexer.on('ready', () => {
@@ -182,6 +183,31 @@ tape('prefix', t => {
       })
     })
   }
+})
+
+tape('batch size one', t => {
+  const trie = hypertrie(ram, { valueEncoding: 'utf8' })
+  const idx = hi(trie, { batchSize: 1, map, transformNode: true })
+  let i = 0
+  function map (msg, next) {
+    if (msg.key === 'foo') {
+      t.equal(msg.value, 'hi foo')
+    } else if (msg.key === 'bar') {
+      t.equal(msg.value, 'hi bar')
+    } else t.error(new Error('invalid'))
+    i++
+    next()
+    // if (++i === 2) t.end()
+  }
+  idx.on('finished', () => {
+    t.equal(i, 2)
+    t.end()
+  })
+
+  trie.batch([
+    { op: 'put', key: 'foo', value: 'hi foo' },
+    { op: 'put', key: 'bar', value: 'hi bar' }
+  ])
 })
 
 function replicate (a, b, cb) {
