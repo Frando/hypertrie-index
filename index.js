@@ -21,12 +21,12 @@ function hypertrieIndex (db, opts, cb) {
   opts.valueEncoding = opts.valueEncoding ? codecs(opts.valueEncoding) : db.valueEncoding
 
   if (opts.fetchState) {
-    opts.fetchState((err, state) => {
+    opts.fetchState((err, fetchedState) => {
       if (err) return cb(err)
-      state = decodeState(state)
-      process.nextTick(run)
+      state = decodeState(fetchedState)
+      run()
     })
-  } else process.nextTick(run)
+  } else run()
 
   emitter.pause = function () {
     paused = true
