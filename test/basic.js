@@ -190,11 +190,13 @@ tape('batch size one', t => {
   const idx = hi(trie, { batchSize: 1, map, transformNode: true })
   let i = 0
   function map (msg, next) {
+    t.equal(msg.length, 1, 'one msg only')
+    msg = msg[0]
     if (msg.key === 'foo') {
       t.equal(msg.value, 'hi foo')
     } else if (msg.key === 'bar') {
       t.equal(msg.value, 'hi bar')
-    } else t.error(new Error('invalid'))
+    } else t.fail('key does not match', msg)
     i++
     next()
     // if (++i === 2) t.end()
@@ -208,6 +210,31 @@ tape('batch size one', t => {
     { op: 'put', key: 'foo', value: 'hi foo' },
     { op: 'put', key: 'bar', value: 'hi bar' }
   ])
+})
+
+tape('batch size', t => {
+  const trie = hypertrie(ram, { valueEncoding: 'utf8' })
+  hi(trie, { batchSize: 10, map, transformNode: true })
+  let tens = 3
+  function map (msgs, next) {
+    if (msgs.length === 10) tens = tens - 1
+    else if (msgs.length === 2) {
+      t.equal(tens, 0, '3 * 10')
+      t.end()
+    } else {
+      t.fail('invalid msg length ' + msgs.length)
+    }
+    next()
+  }
+  // idx.on('finished', () => {
+  //   t.equal(i, 2)
+  //   t.end()
+  // })
+
+  let ops = new Array(32).fill(null).map((val, i) => ({
+    op: 'put', key: 'key/' + i, value: i
+  }))
+  trie.batch(ops, err => t.error(err, 'put no err'))
 })
 
 function replicate (a, b, cb) {

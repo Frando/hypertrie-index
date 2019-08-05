@@ -18,6 +18,7 @@
     "tape": "^4.10.2"
   },
   "dependencies": {
+    "codecs": "^2.0.0",
     "varint": "^5.0.0"
   }
 }

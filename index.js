@@ -1,4 +1,5 @@
 const varint = require('varint')
+const codecs = require('codecs')
 const { EventEmitter } = require('events')
 
 module.exports = hypertrieIndex
@@ -18,6 +19,7 @@ function hypertrieIndex (db, opts, cb) {
 
   opts.live = defaultTrue(opts.live)
   if (opts.live) db.watch(opts.prefix || '', run)
+  opts.valueEncoding = opts.valueEncoding ? codecs(opts.valueEncoding) : db.valueEncoding
 
   if (opts.fetchState) {
     opts.fetchState((err, state) => {
@@ -50,6 +52,7 @@ function hypertrieIndex (db, opts, cb) {
     if (db.version < 2) return
     // console.log('RUN', state.seq, state.checkpoint ? true : null)
     running = true
+    emitter.emit('start')
     const { seq, checkpoint } = state
 
     if (checkpoint && checkpoint.length) {
@@ -90,8 +93,10 @@ function hypertrieIndex (db, opts, cb) {
   function forward (cb) {
     // console.log('fwd', batch)
     if (!batch.length) return cb()
+
+    batch = batch.map(msg => decodeValues(msg, opts.valueEncoding))
     if (opts.transformNode) batch = batch.map(transformNode)
-    if (opts.batchSize === 1) batch = batch[0]
+
     opts.map(batch, () => {
       updateState(cb, batch)
       batch = []
@@ -152,14 +157,14 @@ function decodeState (buf) {
   return state
 }
 
-function transformNode (node, valueEncoding) {
+function transformNode (node) {
   let msg
   if (node.left) {
-    msg = decodeValue(node.left, valueEncoding)
+    msg = node.left
     msg.delete = false
-    if (node.right) msg.previousNode = decodeValue(node.right)
+    if (node.right) msg.previousNode = msg.right
   } else {
-    msg = decodeValue(node.right, valueEncoding)
+    msg = node.right
     msg.delete = true
   }
   return msg
@@ -167,8 +172,15 @@ function transformNode (node, valueEncoding) {
 
 function decodeValue (node, valueEncoding) {
   if (!valueEncoding) return node
+  if (!Buffer.isBuffer(node.value)) return node
   node.value = valueEncoding.decode(node.value)
   return node
+}
+
+function decodeValues (msg, valueEncoding) {
+  if (msg.left) msg.left = decodeValue(msg.left, valueEncoding)
+  if (msg.right) msg.right = decodeValue(msg.right, valueEncoding)
+  return msg
 }
 
 function noop () {}
