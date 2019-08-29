@@ -78,7 +78,6 @@ function hypertrieIndex (db, opts, cb) {
   }
 
   function _next (err, msg) {
-    // console.log('next', msg)
     if (err) emitter.emit('error', err)
     if (msg) {
       batch.push(msg)
@@ -95,8 +94,7 @@ function hypertrieIndex (db, opts, cb) {
   }
 
   function forward (cb) {
-    // console.log('fwd', batch)
-    if (!batch.length) return cb()
+    if (!batch.length) return updateState(cb, [])
 
     batch = batch.map(msg => decodeValues(msg, opts.valueEncoding))
     if (opts.transformNode) batch = batch.map(transformNode)
